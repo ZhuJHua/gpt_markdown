@@ -9,6 +9,8 @@
 /// Not exported: this is the incremental view's policy, not API.
 library;
 
+import '../plusparse/scanner.dart';
+
 /// The formula left open at the end of [source], closed so that it parses.
 ///
 /// Returns where its opener starts and the text to render in place of
@@ -17,19 +19,23 @@ library;
 /// backticks swallow any `\(` inside.
 ///
 /// `\(` and `\[` are always maths; `$$` and `$` only when [dollarsAreMath].
-/// A `$` before a digit is a price, as elsewhere in the streaming hold.
+/// A `$` before a digit is a price, as elsewhere in the streaming hold, and a
+/// `$` before whitespace opens nothing (Pandoc's rule, which the final render
+/// follows). Single-dollar maths does not cross a line break: an opener whose
+/// line has ended without a closer is prose.
 ({int start, String completed})? completeOpenMath(
   String source, {
   required bool dollarsAreMath,
 }) {
   final n = source.length;
+  final dollars = DollarMathCloser(source, sameLine: true);
   var i = 0;
   while (i < n) {
     final c = source.codeUnitAt(i);
     if (c == 0x60 /* ` */ ) {
-      final close = source.indexOf('`', i + 1);
-      if (close == -1) return null;
-      i = close + 1;
+      final span = codeSpanAt(source, i);
+      if (span == null) return null;
+      i = span.close + span.run;
       continue;
     }
     if (c == 0x5C /* \ */ && i + 1 < n) {
@@ -55,12 +61,20 @@ library;
         continue;
       }
       final next = i + 1 < n ? source.codeUnitAt(i + 1) : -1;
-      if (next >= 0x30 && next <= 0x39) {
+      if ((next >= 0x30 && next <= 0x39) ||
+          (next != -1 && isUnicodeWhitespace(next))) {
         i += 1;
         continue;
       }
-      final end = _unescapedDollar(source, i + 1);
-      if (end == -1) return _open(source, i, i + 1, r'\(', r'\)');
+      final end = dollars.find(i);
+      if (end == -1) {
+        // Still open only while its line is the last one.
+        if (!source.contains('\n', i)) {
+          return _open(source, i, i + 1, r'\(', r'\)');
+        }
+        i += 1;
+        continue;
+      }
       i = end + 1;
       continue;
     }
@@ -91,11 +105,3 @@ String _withoutPartialTail(String body) => body
 
 final RegExp _partialEnvironment = RegExp(r'\\(?:begin|end)\{[^}]*$');
 final RegExp _partialCommand = RegExp(r'\\[a-zA-Z]*$');
-
-int _unescapedDollar(String source, int from) {
-  var i = source.indexOf(r'$', from);
-  while (i > 0 && source.codeUnitAt(i - 1) == 0x5C /* \ */ ) {
-    i = source.indexOf(r'$', i + 1);
-  }
-  return i;
-}

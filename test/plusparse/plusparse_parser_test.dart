@@ -248,13 +248,21 @@ void main() {
       }
     });
 
-    test('unclosed ** falls back to italic when a later * exists', () {
-      // Mirrors the Rust parser: `**b and *c` has no closing `**`, so the
-      // first `*` stays literal and `*b and *` matches as italic.
+    test('unclosed ** stays literal when no * can close it', () {
+      // `**b and *c` has no closing `**`, and the only later `*` has a space
+      // before it, so by CommonMark it cannot close an italic either. (The
+      // Rust parser this was ported from matched `*b and *` as italic.)
       final doc = p('a **b and *c');
       final para = doc.children[0] as MdParagraph;
+      expect(para.children.whereType<MdItalic>(), isEmpty);
+      expect(inlineText(para.children), 'a **b and *c');
+    });
+
+    test('unclosed ** falls back to italic when a later * can close', () {
+      final doc = p('a **b and* c');
+      final para = doc.children[0] as MdParagraph;
       final italic = para.children.whereType<MdItalic>().single;
-      expect(inlineText(italic.children), 'b and ');
+      expect(inlineText(italic.children), 'b and');
       expect(inlineText(para.children), 'a *b and c');
     });
 

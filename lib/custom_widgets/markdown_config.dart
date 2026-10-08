@@ -316,16 +316,18 @@ final class LinkBuildDetails extends InlineBuildDetails {
     this.onTap,
   });
 
-  /// The link target, verbatim from the document — `/docs/a`,
-  /// `https://x.dev`, `mailto:a@b.c`. Never resolved or normalised.
+  /// The link target — `/docs/a`, `https://x.dev`, `mailto:a@b.c`. As
+  /// written, except that backslash escapes and entity references are decoded
+  /// (CommonMark), and a reference link (`[text][label]`) carries the URL of
+  /// its `[label]: url` definition. Never otherwise resolved or normalised.
   final String url;
 
   /// The label as plain text.
   ///
   /// This is what [GptMarkdownConfig.onLinkTap] receives as its second
   /// argument. For an autolink it is the URL itself. It is **not** a link
-  /// title — Markdown titles are not parsed yet, and when they are they arrive
-  /// as a field of their own.
+  /// title: the parser reads `[text](url "title")` titles into `MdLink.title`,
+  /// but they do not reach builders yet.
   final String label;
 
   /// The label, already parsed and styled with [style].
@@ -424,17 +426,23 @@ final class SourceTagBuildDetails extends InlineBuildDetails {
     required this.id,
     required this.sourceTagStyle,
     this.onTap,
+    this.url,
   });
 
   /// The tag's contents — `1` for `[1]`.
   final String id;
 
+  /// The URL the document defines for this tag with a `[1]: https://…`
+  /// reference definition, or null.
+  final String? url;
+
   /// The resolved [SourceTagStyle] — fill, text style, size, shape and
   /// padding, with theme and defaults already folded in.
   final SourceTagStyle sourceTagStyle;
 
-  /// Invokes [GptMarkdownConfig.onSourceTagTap] with [id], or null when no
-  /// handler is set.
+  /// Invokes [GptMarkdownConfig.onSourceTagTap] with [id]. Without that
+  /// handler, a tag with a [url] invokes [GptMarkdownConfig.onLinkTap] with
+  /// the URL and [id] instead. Null when neither applies.
   final VoidCallback? onTap;
 
   /// The chip the package would have built, as a placeholder span.

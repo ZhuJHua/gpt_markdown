@@ -91,17 +91,54 @@ const textScaleSamples = <String, String>{
       r'\( a^2 + b^2 = c^2 \)'
       ' and a block:\n\n'
       r'\[ \int_0^1 x\,dx \]',
+  'Dollar maths': r'Inline $x^2 + y^2$, a price that stays text: $5 and $10.'
+      '\n\n'
+      r'$$ \sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6} $$',
+  'Underscore emphasis':
+      '__Bold__, _italic_ and ___both___ with underscores, while '
+          'snake_case_name stays plain.',
+  'Setext headings': 'Heading one\n===========\n\nHeading two\n-----------',
+  'Code spans and fences': 'Double backticks hold a backtick: '
+      '`` a `tick` inside ``.\n\n'
+      '~~~python\nprint("tilde fence")\n~~~\n\n'
+      '````md\n```dart\nvoid main() {}\n```\n````',
+  'Reference links':
+      'Read [the guide][guide], the [pub page][], or [guide].\n\n'
+          '[guide]: https://example.com/guide "The guide"\n'
+          '[pub page]: https://pub.dev',
+  'Footnotes': 'A claim that needs a note[^1], and a second one[^2].\n\n'
+      '[^1]: The first footnote, long enough to wrap onto a second line on '
+      'a phone.\n'
+      '[^2]: The second footnote.',
+  'Citations with URLs': 'A claim [1] and another [2], each chip opening '
+      'its URL.\n\n'
+      '[1]: https://example.com/one\n'
+      '[2]: https://example.com/two',
+  'Escapes and entities': r'\*not italic\*, \_not italic\_, \# not a heading.'
+      '\n\n'
+      'Entities: &amp; &copy; &mdash; &rarr; &alpha;&beta;&gamma; &#x1F680;',
   'Everything': '''# Release notes
 
 Body text with **bold**, *italic*, ~~struck through~~, <u>underlined</u> and
-`inline code`, long enough to wrap on a phone.
+`inline code`, long enough to wrap on a phone. The same with underscores:
+__bold__ and _italic_, while snake_case_name stays plain. Escapes \\*stay\\*
+literal, and entities decode: &copy; &mdash; &rarr;.
+
+Setext heading
+--------------
 
 ## Links and tokens
 
 An explicit [link to the docs](https://example.com), a bare URL
 https://pub.dev/packages/gpt_markdown, a host www.example.com and an address
 ada@example.com. An angle autolink <https://example.com>, an allowlisted
-scheme myapp://open?id=7, and a citation after the claim [1].
+scheme myapp://open?id=7, and a citation after the claim [1]. A reference
+link to [the guide][guide], and a footnote[^note].
+
+[1]: https://example.com/source
+[guide]: https://example.com/guide
+
+[^note]: A footnote, rendered where it is written.
 
 App tokens: @ada shipped it :tada: — discuss in #design. Unknown ones stay
 plain text: #2959 and @nobody.
@@ -146,11 +183,19 @@ void main() {
 }
 ```
 
+~~~python
+print("a tilde fence")
+~~~
+
 ### Maths
 
 Inline \\( a^2 + b^2 = c^2 \\) inside a sentence, then a block:
 
 \\[ \\int_0^1 x^2\\,dx = \\frac{1}{3} \\]
+
+And a dollar block:
+
+\$\$ e^{i\\pi} + 1 = 0 \$\$
 
 ### An image
 
@@ -399,6 +444,7 @@ class _TextScalePageState extends State<TextScalePage> {
                   // scale badly.
                   inlinePatterns: _demoPatterns(context),
                   autolinkSchemes: const {'myapp'},
+                  useDollarSignsForLatex: true,
                   textDirection: _sample == 'Right to left'
                       ? TextDirection.rtl
                       : TextDirection.ltr,

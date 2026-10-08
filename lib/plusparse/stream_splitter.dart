@@ -2,11 +2,16 @@
 /// used by gpt_markdown's incremental rendering mode.
 ///
 /// Segments are separated by blank lines, except inside fenced code blocks
-/// (```) and block LaTeX (`\[ ... \]`), which stay whole. Each segment can be
+/// (```` ``` ```` or `~~~`), block LaTeX (`\[ ... \]`) and HTML comments,
+/// which stay whole. Each segment can be
 /// parsed and rendered on its own; during streaming only the last segment's
 /// text changes, so all earlier segments' widgets can be cached and reused —
 /// that caps per-chunk rebuild/layout cost at the tail instead of the whole
 /// message.
+///
+/// A blank line followed by content indented under a list item (or a
+/// footnote) is part of that item, not a boundary — see
+/// [continuesAfterBlank].
 ///
 /// Divergence from a full-document parse: a list whose items are separated by
 /// blank lines becomes multiple adjacent list segments instead of one list.
@@ -15,6 +20,7 @@
 library;
 
 import 'block_syntax.dart';
+import 'scanner.dart';
 
 List<String> splitStreamSegments(
   String src, {
@@ -26,8 +32,9 @@ List<String> splitStreamSegments(
   final lines = normalized.split('\n');
   final segments = <String>[];
   final current = <String>[];
-  var inFence = false;
+  FenceOpen? fence;
   var inLatex = false;
+  var inComment = false;
 
   void closeSegment() {
     if (current.isNotEmpty) {
@@ -40,10 +47,11 @@ List<String> splitStreamSegments(
     final line = lines[index];
     final trimmed = line.trimLeft();
 
-    if (inFence) {
+    final open = fence;
+    if (open != null) {
       current.add(line);
-      if (trimmed.startsWith('```')) {
-        inFence = false;
+      if (isFenceClose(line, open)) {
+        fence = null;
       }
       continue;
     }
@@ -51,6 +59,13 @@ List<String> splitStreamSegments(
       current.add(line);
       if (line.contains('\\]')) {
         inLatex = false;
+      }
+      continue;
+    }
+    if (inComment) {
+      current.add(line);
+      if (line.contains('-->')) {
+        inComment = false;
       }
       continue;
     }
@@ -63,13 +78,29 @@ List<String> splitStreamSegments(
     }
 
     if (line.trim().isEmpty) {
+      // A blank line inside a list item — before the item's second paragraph
+      // or its code block — is not a block boundary.
+      var next = index + 1;
+      while (next < lines.length && lines[next].trim().isEmpty) {
+        next += 1;
+      }
+      if (current.isNotEmpty &&
+          next < lines.length &&
+          continuesAfterBlank(current, lines[next])) {
+        current.add(line);
+        continue;
+      }
       closeSegment();
       continue;
     }
 
     current.add(line);
-    if (trimmed.startsWith('```')) {
-      inFence = true;
+    fence = fenceOpen(trimmed);
+    if (fence != null) {
+      continue;
+    }
+    if (startsHtmlComment(trimmed) && !trimmed.substring(4).contains('-->')) {
+      inComment = true;
       continue;
     }
     if (trimmed.startsWith('\\[')) {

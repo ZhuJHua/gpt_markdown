@@ -11,7 +11,12 @@
 /// anything whose width changes as it arrives.
 library;
 
-/// A reply exercising every supported construct.
+/// A reply exercising every supported construct — including the CommonMark
+/// additions: underscore emphasis, multi-backtick code, tilde and nested
+/// fences, setext headings, escapes, entities, a hidden comment, `$$` maths,
+/// link titles, reference links, citation URLs and footnotes. The
+/// definitions at the end stream in last, so the links, chips and footnote
+/// numbers above them appear once their definitions arrive.
 const String streamingReply = r'''# Reversing a linked list
 
 Here is the **iterative** approach. It runs in \( O(n) \) time and uses
@@ -33,6 +38,16 @@ Plain, **bold**, *italic*, ***bold italic***, ~~struck through~~,
 <u>underlined</u>, `inline code`, and *italic wrapping **bold** and back to
 italic*. Escapes hold too: \*not italic\* and a literal \| pipe.
 
+Underscores work the same way — __bold__, _italic_, ___both___ — but never
+inside a word, so `snake_case` and snake_case_name stay plain. Double
+backticks hold a backtick: `` call `reverse` here ``. Entities decode:
+&copy; &mdash; &rarr; &le; &#x1F680;, and 2 * 3 * 4 is arithmetic.
+
+Setext heading, underlined
+--------------------------
+
+<!-- A comment the reader never sees, even mid-stream. -->
+
 ## The code
 
 ```dart
@@ -49,6 +64,24 @@ ListNode? reverse(ListNode? head) {
 }
 ```
 
+The same in Python, in a tilde fence:
+
+~~~python
+def reverse(head):
+    prev = None
+    while head:
+        head.next, prev, head = prev, head, head.next
+    return prev
+~~~
+
+A longer fence can show a fence inside it:
+
+````markdown
+```dart
+reverse(head);
+```
+````
+
 A fence with no language, holding characters that look like markup:
 
 ```
@@ -64,6 +97,12 @@ A fence with no language, holding characters that look like markup:
 | Hybrid    | O(n) | O(1)  | 1               | ***rarely*** worth it    |
 
 ## The maths
+
+In dollars, too — a price like $5 stays text, and a block opens with `$$`:
+
+$$
+S(n) = \sum_{k=0}^{n-1} 1 = n
+$$
 
 The cost of the recursive form is the sum of the frames it opens:
 
@@ -170,13 +209,24 @@ Pick one:
 >
 > > A quote inside a quote, with **bold** and `code` in it.
 >
-> See [the docs](https://example.com) or https://pub.dev for more.
+> See [the docs](https://example.com "Linked-list docs") or
+> https://pub.dev for more, or the [reference][ref] section.
 
 ---
 
 ![A 120x60 placeholder](https://placehold.co/120x60/png)
 
 Citations render as chips: the original result [1], and the follow-up [2].
+Floyd's algorithm is a classic[^floyd], and the iterative form is the one
+most standard libraries use[^stdlib].
 
 That is everything. Ask if you want the recursive version too.
+
+[1]: https://en.wikipedia.org/wiki/Linked_list
+[2]: https://en.wikipedia.org/wiki/Cycle_detection
+[ref]: https://example.com/reference
+
+[^floyd]: Floyd's tortoise and hare finds a cycle in O(n) time and O(1)
+    space.
+[^stdlib]: Reversal is usually a library call in practice.
 ''';

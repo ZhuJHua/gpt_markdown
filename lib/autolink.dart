@@ -35,7 +35,10 @@ class AutolinkMd extends InlineMd {
   static const String _trailingPunctuation = '?!.,:*_~';
 
   /// A link cannot start in the middle of a word, a path, or an address.
-  static const String _leftBoundary = r'(?<![\w@.+/-])';
+  ///
+  /// `_` does not count as part of a word here: GFM lets an autolink follow
+  /// `_` as it follows `*`, `~` and `(`, so `_https://x.dev` links.
+  static const String _leftBoundary = r'(?<![A-Za-z0-9@.+/-])';
 
   static final RegExp _pattern = RegExp(
     <String>[

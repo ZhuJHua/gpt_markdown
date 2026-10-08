@@ -286,6 +286,22 @@ class PlusparseRenderer {
         return _list(context, items, config, ordered: false, start: 1);
       case MdOrderedList(:final start, :final items):
         return _list(context, items, config, ordered: true, start: start);
+      case MdFootnoteDefinitions(:final footnotes):
+        // A numbered list whose numbers are the footnotes' own, so a
+        // definition renders under the number its references show.
+        return _list(
+          context,
+          [
+            for (final footnote in footnotes)
+              MdListItem(
+                children: _unwrapLeadingParagraph(footnote.children),
+                number: footnote.number,
+              ),
+          ],
+          config,
+          ordered: true,
+          start: footnotes.first.number,
+        );
       case MdTable():
         return [_table(context, node, config)];
       // Inline nodes reaching block position (defensive; parser does not
@@ -354,8 +370,18 @@ class PlusparseRenderer {
     return spans;
   }
 
+  /// [blocks] with a leading paragraph's inline content lifted out, which is
+  /// the shape a list item's children take: inline content, then blocks.
+  static List<MdNode> _unwrapLeadingParagraph(List<MdNode> blocks) {
+    if (blocks.isNotEmpty && blocks.first is MdParagraph) {
+      return [...(blocks.first as MdParagraph).children, ...blocks.skip(1)];
+    }
+    return blocks;
+  }
+
   static bool _isInline(MdNode n) => switch (n) {
     MdText() ||
+    MdFootnoteReference() ||
     MdBold() ||
     MdItalic() ||
     MdStrike() ||
@@ -589,10 +615,12 @@ class PlusparseRenderer {
     return withPatterns(text);
   }
 
-  /// Autolinks one run of plain text.
+  /// Autolinks one run of plain text, and claims any inline pattern masking
+  /// could not reach.
   ///
-  /// Patterns have already been expanded by the caller, so the only
-  /// consumer-facing syntax left here is autolinking.
+  /// Masked pattern matches have already been expanded by the caller. What is
+  /// left is autolinking, plus a pattern that only matches the parsed run and
+  /// never the source — see the comment in the body.
   ///
   /// This was the last thing on the plusparse path that ran the legacy
   /// combined regex, and it was the most expensive: the autolink pattern is a
@@ -606,9 +634,6 @@ class PlusparseRenderer {
     String text,
     GptMarkdownConfig config,
   ) {
-    if (!config.autolink) {
-      return [TextSpan(text: text, style: config.style)];
-    }
     final patterns = config.inlinePatterns;
     if (patterns != null && patterns.isNotEmpty) {
       // Not the scanner: a pattern and an autolink decide precedence between
@@ -622,12 +647,21 @@ class PlusparseRenderer {
       // `b` that `a**b**c` parses to and never matches the source, so this
       // dispatch is what renders it. `test/regression/autolink_parity_test`
       // pins that case.
+      //
+      // So it runs whether or not autolinking is on. It used to sit behind
+      // the `autolink` check, and with `autolink: false` a mention inside
+      // bold — `**@alice**` — stayed raw text.
       return MarkdownComponent.generate(
         context,
         text,
-        config.copyWith(inlineComponents: [AutolinkMd()]),
+        config.copyWith(
+          inlineComponents: config.autolink ? [AutolinkMd()] : const [],
+        ),
         false,
       );
+    }
+    if (!config.autolink) {
+      return [TextSpan(text: text, style: config.style)];
     }
     return autolinkSpans(context, text, config);
   }
@@ -731,14 +765,38 @@ class PlusparseRenderer {
           width: width,
           height: height,
         );
-      case MdSourceTag(:final id):
-        return sourceTagSpan(context, id, config);
+      case MdSourceTag(:final id, :final url):
+        return sourceTagSpan(context, id, config, url: url);
+      case MdFootnoteReference(:final number):
+        return _footnoteReference(context, number, config);
       // Block nodes in inline position (nested content) fall back to their
       // block rendering.
       default:
         final blocks = _block(context, node, config);
         return blocks.length == 1 ? blocks.first : TextSpan(children: blocks);
     }
+  }
+
+  /// A footnote reference: its number, small and raised, in the link colour.
+  static InlineSpan _footnoteReference(
+    BuildContext context,
+    int number,
+    GptMarkdownConfig config,
+  ) {
+    final style = config.style ?? const TextStyle();
+    return scaledWidgetSpan(
+      config: config,
+      alignment: PlaceholderAlignment.top,
+      baseline: null,
+      child: Text(
+        '$number',
+        style: style.copyWith(
+          fontSize: (style.fontSize ?? 14) * 0.75,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+        textDirection: config.textDirection,
+      ),
+    );
   }
 
   static InlineSpan _link(
@@ -768,6 +826,8 @@ class PlusparseRenderer {
           out.write(tex);
         case MdSourceTag(:final id):
           out.write(id);
+        case MdFootnoteReference(:final number):
+          out.write(number);
         case MdBold(:final children):
         case MdItalic(:final children):
         case MdStrike(:final children):

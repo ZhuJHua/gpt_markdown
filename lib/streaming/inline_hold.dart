@@ -17,6 +17,8 @@
 /// instead, and holds only the text before it.
 library;
 
+import '../plusparse/scanner.dart';
+
 /// Longest run of text the reveal will wait on for a delimiter that also
 /// occurs in ordinary prose.
 ///
@@ -66,14 +68,16 @@ int inlineSafeLength(String source, {bool holdMathDollars = false}) {
   final outside = StringBuffer();
   while (i < source.length) {
     if (source.codeUnitAt(i) == 0x60 /* ` */ ) {
-      final close = source.indexOf('`', i + 1);
-      if (close == -1) {
+      // A run of N backticks closes at the next run of exactly N.
+      final span = codeSpanAt(source, i);
+      if (span == null) {
         lastOpenTick = i;
         break;
       }
       // Keep the offsets aligned without copying the span's contents.
-      outside.write(' ' * (close + 1 - i));
-      i = close + 1;
+      final end = span.close + span.run;
+      outside.write(' ' * (end - i));
+      i = end;
       continue;
     }
     outside.writeCharCode(source.codeUnitAt(i));
@@ -93,9 +97,17 @@ int inlineSafeLength(String source, {bool holdMathDollars = false}) {
   }
   // Single `*` for italic, but only the ones that are not part of `**`.
   holdAt(_lastUnpairedStar(rest), proseDelimiterHold);
+  // `_` and `__`, but only where they can open: an underscore inside a word
+  // (`snake_case`) never does, so it is never waited on.
+  holdAt(_lastOpenUnderscore(rest), proseDelimiterHold);
 
   // Delimiters with distinct open and close forms.
-  for (final pair in const [(r'\(', r'\)'), (r'\[', r'\]'), ('<u>', '</u>')]) {
+  for (final pair in const [
+    (r'\(', r'\)'),
+    (r'\[', r'\]'),
+    ('<u>', '</u>'),
+    ('<!--', '-->'),
+  ]) {
     final open = rest.lastIndexOf(pair.$1);
     if (open != -1 && rest.indexOf(pair.$2, open + pair.$1.length) == -1) {
       holdAt(open, markupDelimiterHold);
@@ -125,7 +137,7 @@ int inlineSafeLength(String source, {bool holdMathDollars = false}) {
   final lastLine = source.substring(lastNewline + 1);
   if (lastLine.trimLeft().startsWith('|')) {
     var holdIndex = lastNewline + 1;
-    if (lastNewline >= 0 && _partialTableSeparator.hasMatch(lastLine.trim())) {
+    if (lastNewline > 0 && _partialTableSeparator.hasMatch(lastLine.trim())) {
       final prevNewline = source.lastIndexOf('\n', lastNewline - 1);
       final prevLine = source.substring(prevNewline + 1, lastNewline);
       if (prevLine.trimLeft().startsWith('|')) {
@@ -141,6 +153,26 @@ int inlineSafeLength(String source, {bool holdMathDollars = false}) {
     holdAt(_lastUnpairedDollar(rest), markupDelimiterHold);
   }
 
+  // A last line that is not finished deciding what it is:
+  //
+  // * `---` / `===` under a paragraph makes it a heading, but `-` is also the
+  //   start of `- item`. Shown early, the paragraph above flickers into a
+  //   heading and back.
+  // * `[label]: url` is a definition, hidden once it is one — but only once
+  //   its URL has arrived. Shown early, it flashes as text and vanishes.
+  if (lastNewline >= 0 && setextUnderlineLevel(lastLine) != null) {
+    holdAt(lastNewline + 1, proseDelimiterHold);
+  }
+  if (_definitionStart.hasMatch(lastLine)) {
+    holdAt(lastNewline + 1, markupDelimiterHold);
+  }
+  // * `2` or `2.` or `*` alone is the start of a list item still arriving.
+  //   Shown early, it renders as a paragraph under the list — a line taller —
+  //   and the list jumps back up a chunk later when it becomes an item.
+  if (lastNewline >= 0 && _partialListMarker.hasMatch(lastLine)) {
+    holdAt(lastNewline + 1, proseDelimiterHold);
+  }
+
   // A trailing character that is only the first half of an opener: `\` may
   // become `\(` and `<` may become `<u>`. Un-held it is shown, revealed, and
   // then vanishes when the second half lands — the one leak the rules above
@@ -151,12 +183,38 @@ int inlineSafeLength(String source, {bool holdMathDollars = false}) {
     holdAt(partial.start, proseDelimiterHold);
   }
 
+  // A hold that ends just after a list marker would show an empty item —
+  // `2. ` with its content held back — which is a different height from the
+  // item it becomes, so the list jumps when the content lands. Hold the
+  // marker with its content instead.
+  if (limit > 0 && limit < source.length) {
+    final lineStart = source.lastIndexOf('\n', limit - 1) + 1;
+    if (lineStart > 0 &&
+        _bareListMarker.hasMatch(source.substring(lineStart, limit))) {
+      limit = lineStart;
+    }
+  }
+
   return limit;
 }
 
-/// A trailing `\`, `<`, `<u`, `</` or `</u` — an opener the next character
-/// may complete.
-final RegExp _partialTrailingOpener = RegExp(r'(\\|</?u?)$');
+/// A list marker with nothing after it yet: `2. `, `- `, `* [ ] `.
+final RegExp _bareListMarker = RegExp(
+  r'^\s*(?:\d{1,9}[.)]|[-*+])(?:\s+\[[ xX]?\]?)?\s*$',
+);
+
+/// A trailing `\`, `<`, `<u`, `</`, `</u`, `<!` or `<!-` — an opener the next
+/// character may complete.
+final RegExp _partialTrailingOpener = RegExp(r'(\\|</?u?|<!-?)$');
+
+/// A line that is only a list marker so far: `2`, `12.`, `3)`, `*`, `+`.
+final RegExp _partialListMarker = RegExp(r'^\s*(?:\d{1,9}[.)]?|[*+])$');
+
+/// The start of a link or footnote definition line: `[label]:` — or `[label]`
+/// alone, which the next character turns into one or not. Revealed early, a
+/// `[1]` showed as a citation chip, and since the hold never moves back, the
+/// chip stayed until the line ended and then vanished.
+final RegExp _definitionStart = RegExp(r'^ {0,3}\[[^\]]+\](?::|$)');
 
 /// A table delimiter row still arriving: only pipes, colons, dashes, spaces.
 final RegExp _partialTableSeparator = RegExp(r'^\|[\s|:\-]*$');
@@ -214,14 +272,24 @@ String _maskLineMarkers(String text) {
   return String.fromCharCodes(units);
 }
 
-/// Index of the last unpaired single `$`, ignoring every `$$` and every
-/// escaped `\$`.
+/// Index of the single `$` still open at the end of [text], ignoring every
+/// `$$` and every escaped `\$`, or -1.
+///
+/// Pairs the way the final render does (Pandoc's rule): an opener has a
+/// non-space after it, a closer a non-space before it and no digit after it,
+/// and the two are on one line.
 int _lastUnpairedDollar(String text) {
-  var count = 0;
-  var last = -1;
+  var open = -1;
   var i = 0;
   while (i < text.length) {
-    if (text.codeUnitAt(i) != 0x24 /* $ */ ) {
+    final c = text.codeUnitAt(i);
+    if (c == 0x0A) {
+      // Single-dollar maths does not cross a line break.
+      open = -1;
+      i += 1;
+      continue;
+    }
+    if (c != 0x24 /* $ */ ) {
       i += 1;
       continue;
     }
@@ -233,18 +301,70 @@ int _lastUnpairedDollar(String text) {
       i += 2;
       continue;
     }
-    // `$5` is a price. Model-emitted maths opens with a letter or a command
-    // (`$x$`, `$\frac…`); holding a digit-led dollar mostly withholds money.
+    final before = i > 0 ? text.codeUnitAt(i - 1) : -1;
     final next = i + 1 < text.length ? text.codeUnitAt(i + 1) : -1;
-    if (next >= 0x30 && next <= 0x39) {
+    final isDigit = next >= 0x30 && next <= 0x39;
+    if (open != -1) {
+      if (i > open + 1 && !isUnicodeWhitespace(before) && !isDigit) {
+        open = -1;
+      }
       i += 1;
       continue;
     }
-    count += 1;
-    last = i;
+    // `$5` is a price. Model-emitted maths opens with a letter or a command
+    // (`$x$`, `$\frac…`); holding a digit-led dollar mostly withholds money.
+    // A `$` before a space opens nothing at all. A `$` at the very end has
+    // not decided yet.
+    if (!isDigit && !(next != -1 && isUnicodeWhitespace(next))) {
+      open = i;
+    }
     i += 1;
   }
-  return count.isOdd ? last : -1;
+  return open;
+}
+
+/// Index of the `_` or `__` run still open at the end of [text], or -1.
+///
+/// Uses the parser's rule: a run opens only with a non-space after it and
+/// whitespace or punctuation before it, and closes only with a non-space
+/// before it and whitespace or punctuation after it.
+int _lastOpenUnderscore(String text) {
+  if (!text.contains('_')) {
+    return -1;
+  }
+  var open = -1;
+  var i = 0;
+  while (i < text.length) {
+    if (text.codeUnitAt(i) != 0x5F /* _ */ ) {
+      i += 1;
+      continue;
+    }
+    if (i > 0 && text.codeUnitAt(i - 1) == 0x5C /* \ */ ) {
+      i += 1;
+      continue;
+    }
+    var run = 1;
+    while (i + run < text.length && text.codeUnitAt(i + run) == 0x5F) {
+      run += 1;
+    }
+    final before = codePointBefore(text, i);
+    final after = codePointAt(text, i + run);
+    final beforeSpaceOrPunct =
+        isUnicodeWhitespace(before) || isUnicodePunctuation(before);
+    final afterSpaceOrPunct =
+        isUnicodeWhitespace(after) || isUnicodePunctuation(after);
+    if (open != -1) {
+      if (!isUnicodeWhitespace(before) && afterSpaceOrPunct) {
+        open = -1;
+      }
+    } else if (after != -1 &&
+        !isUnicodeWhitespace(after) &&
+        beforeSpaceOrPunct) {
+      open = i;
+    }
+    i += run;
+  }
+  return open;
 }
 
 /// Index of the last unpaired [token], or -1.

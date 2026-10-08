@@ -7,13 +7,18 @@ library;
 
 import 'ast.dart';
 import 'block_syntax.dart';
+import 'definitions.dart';
 import 'inline_parser.dart';
 import 'scanner.dart';
 
+/// Parses [src]. Link and footnote definitions are collected from [src]
+/// itself unless [definitions] is given — the incremental view passes the
+/// whole document's, because it parses one segment at a time.
 MdDocument parseDocument(
   String src,
   bool useDollar, [
   MarkdownBlockRegistry? registry,
+  MarkdownDefinitions? definitions,
 ]) {
   // Two full rewrites of the source, for a character most sources do not
   // contain. Checking first is one scan that usually ends in none.
@@ -21,17 +26,26 @@ MdDocument parseDocument(
       ? src.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
       : src;
   final lines = normalized.split('\n');
-  return MdDocument(children: parseBlocks(lines, useDollar, registry));
+  final defs =
+      definitions ??
+      MarkdownDefinitions.collectLines(lines, blockRegistry: registry);
+  return MdDocument(children: parseBlocks(lines, useDollar, registry, defs));
 }
 
 List<MdNode> parseBlocks(
   List<String> lines,
   bool useDollar, [
   MarkdownBlockRegistry? registry,
+  MarkdownDefinitions defs = MarkdownDefinitions.empty,
 ]) {
   final out = <MdNode>[];
   final n = lines.length;
   var i = 0;
+  // Where the last comment scanned for closed. A later `<!--` line before
+  // that point closes there too, so it is not scanned again — each paragraph
+  // starting `<!--` with the `-->` far below would otherwise rescan to it.
+  ({int next, String trailing})? commentEnd;
+  var commentFrom = -1;
 
   while (i < n) {
     final raw = lines[i];
@@ -48,14 +62,16 @@ List<MdNode> parseBlocks(
       continue;
     }
 
-    // Fenced code block ```lang ... ```
-    if (trimmed.startsWith('```')) {
-      final language = trimmed.substring(3).trim();
+    // Fenced code block ```lang ... ``` or ~~~lang ... ~~~. It closes on a
+    // run of the same character at least as long as the opener, so a ````
+    // fence can show a ``` fence inside it.
+    final fence = fenceOpen(trimmed);
+    if (fence != null) {
       i += 1;
       final code = <String>[];
       var closed = false;
       while (i < n) {
-        if (lines[i].trimLeft().startsWith('```')) {
+        if (isFenceClose(lines[i], fence)) {
           closed = true;
           i += 1;
           break;
@@ -64,8 +80,49 @@ List<MdNode> parseBlocks(
         i += 1;
       }
       out.add(
-        MdCodeBlock(language: language, code: code.join('\n'), closed: closed),
+        MdCodeBlock(
+          language: fence.info,
+          code: code.join('\n'),
+          closed: closed,
+        ),
       );
+      continue;
+    }
+
+    // <!-- comment --> on lines of its own — hidden, blank lines and all.
+    // Unclosed, it runs to the end, as an HTML block does: a comment still
+    // streaming in stays hidden.
+    if (startsHtmlComment(trimmed)) {
+      final cached = commentEnd;
+      final ({int next, String trailing}) end;
+      if (cached != null &&
+          i > commentFrom &&
+          i < cached.next - 1 &&
+          !lines[i].contains('-->', lines[i].indexOf('<!--') + 4)) {
+        end = cached;
+      } else {
+        end = htmlCommentEnd(lines, i);
+        commentEnd = end;
+        commentFrom = i;
+      }
+      if (end.trailing.trim().isEmpty) {
+        i = end.next;
+        continue;
+      }
+    }
+
+    // [label]: url "title" — consumed; the references resolve to it.
+    final linkDefinition = linkDefinitionAt(raw);
+    if (linkDefinition != null && defs.link(linkDefinition.label) != null) {
+      i += 1;
+      continue;
+    }
+
+    // [^label]: text — consecutive definitions render as one list.
+    final footnotes = _parseFootnotes(lines, i, useDollar, registry, defs);
+    if (footnotes != null) {
+      out.add(MdFootnoteDefinitions(footnotes: footnotes.footnotes));
+      i = footnotes.next;
       continue;
     }
 
@@ -109,7 +166,7 @@ List<MdNode> parseBlocks(
       out.add(
         MdHeading(
           level: heading.level,
-          children: parseInline(heading.content, useDollar),
+          children: parseInline(heading.content, useDollar, defs),
         ),
       );
       i += 1;
@@ -138,7 +195,12 @@ List<MdNode> parseBlocks(
           }
           inner.add(stripped);
         } else {
-          // lazy continuation line
+          // A lazy continuation line continues the quote's paragraph — but
+          // `---` or `===` after a quote ends it. Taken lazily they turned the
+          // quote's last line into a setext heading inside the quote.
+          if (isHr(t) || setextUnderlineLevel(t) != null) {
+            break;
+          }
           inner.add(t);
         }
         i += 1;
@@ -148,12 +210,17 @@ List<MdNode> parseBlocks(
           : MarkdownAlertType.fromMarker(inner.first);
       out.add(
         MdBlockQuote(
-          children: parseBlocks(inner, useDollar, registry),
+          children: parseBlocks(inner, useDollar, registry, defs),
           alert: alertType == null
               ? null
               : MdAlert(
                   type: alertType,
-                  children: parseBlocks(inner.sublist(1), useDollar, registry),
+                  children: parseBlocks(
+                    inner.sublist(1),
+                    useDollar,
+                    registry,
+                    defs,
+                  ),
                 ),
         ),
       );
@@ -161,7 +228,7 @@ List<MdNode> parseBlocks(
     }
 
     // Table
-    final tableEnd = _tryTable(lines, i, useDollar, out);
+    final tableEnd = _tryTable(lines, i, useDollar, out, defs);
     if (tableEnd != null) {
       i = tableEnd;
       continue;
@@ -173,7 +240,7 @@ List<MdNode> parseBlocks(
       out.add(
         MdCheckbox(
           checked: checkbox.checked,
-          children: parseInline(checkbox.content, useDollar),
+          children: parseInline(checkbox.content, useDollar, defs),
         ),
       );
       i += 1;
@@ -184,7 +251,7 @@ List<MdNode> parseBlocks(
       out.add(
         MdRadio(
           selected: radio.selected,
-          children: parseInline(radio.content, useDollar),
+          children: parseInline(radio.content, useDollar, defs),
         ),
       );
       i += 1;
@@ -193,23 +260,32 @@ List<MdNode> parseBlocks(
 
     // Lists
     if (unorderedMarker(trimmed) != null) {
-      final r = _parseListInner(lines, i, false, useDollar, registry);
+      final r = _parseListInner(lines, i, false, useDollar, registry, defs);
       out.add(MdUnorderedList(items: r.items));
       i = r.next;
       continue;
     }
     if (orderedMarker(trimmed) != null) {
-      final r = _parseListInner(lines, i, true, useDollar, registry);
+      final r = _parseListInner(lines, i, true, useDollar, registry, defs);
       out.add(MdOrderedList(start: r.start, items: r.items));
       i = r.next;
       continue;
     }
 
-    // Paragraph: gather consecutive non-blank, non-block lines.
+    // Paragraph: gather consecutive non-blank, non-block lines. A `===` or
+    // `---` line under it makes it a setext heading instead.
     final para = <String>[];
+    int? setextLevel;
     while (i < n) {
       if (isBlank(lines[i])) {
         break;
+      }
+      if (para.isNotEmpty) {
+        setextLevel = setextUnderlineLevel(lines[i]);
+        if (setextLevel != null) {
+          i += 1;
+          break;
+        }
       }
       final t = lines[i].trimLeft();
       if (_startsBlock(t) ||
@@ -226,16 +302,59 @@ List<MdNode> parseBlocks(
     // swallowed the two breaks CommonMark does define — two trailing spaces
     // and a trailing backslash — because the newline they mark was gone
     // before the inline parser ran.
-    out.add(MdParagraph(children: parseInline(para.join('\n'), useDollar)));
+    final content = parseInline(para.join('\n'), useDollar, defs);
+    out.add(
+      setextLevel != null
+          ? MdHeading(level: setextLevel, children: content)
+          : MdParagraph(children: content),
+    );
   }
 
   return out;
 }
 
+/// Consecutive footnote definitions starting at line [start] — blank lines
+/// between them allowed — or null when [start] does not open one the
+/// document defines.
+({List<MdFootnote> footnotes, int next})? _parseFootnotes(
+  List<String> lines,
+  int start,
+  bool useDollar,
+  MarkdownBlockRegistry? registry,
+  MarkdownDefinitions defs,
+) {
+  final footnotes = <MdFootnote>[];
+  var i = start;
+  var next = start;
+  while (i < lines.length) {
+    final definition = footnoteDefinitionAt(lines, i);
+    final number = definition == null ? null : defs.footnote(definition.label);
+    if (definition == null || number == null) {
+      break;
+    }
+    footnotes.add(
+      MdFootnote(
+        label: definition.label,
+        number: number,
+        children: parseBlocks(definition.lines, useDollar, registry, defs),
+      ),
+    );
+    next = definition.next;
+    i = next;
+    while (i < lines.length && isBlank(lines[i])) {
+      i += 1;
+    }
+  }
+  if (footnotes.isEmpty) {
+    return null;
+  }
+  return (footnotes: footnotes, next: next);
+}
+
 /// Does the (already left-trimmed) line begin a block construct? Used to know
 /// where a paragraph ends.
 bool _startsBlock(String t) {
-  return t.startsWith('```') ||
+  return fenceOpen(t) != null ||
       t.startsWith('\\[') ||
       isHeading(t) != null ||
       isHr(t) ||
@@ -256,6 +375,7 @@ bool _startsBlock(String t) {
   bool ordered,
   bool useDollar,
   MarkdownBlockRegistry? registry,
+  MarkdownDefinitions defs,
 ) {
   final n = lines.length;
   final base = indentWidth(lines[start]);
@@ -340,21 +460,21 @@ bool _startsBlock(String t) {
       children.add(
         MdCheckbox(
           checked: task.checked,
-          children: parseInline(task.content, useDollar),
+          children: parseInline(task.content, useDollar, defs),
         ),
       );
     } else if (choice != null) {
       children.add(
         MdRadio(
           selected: choice.selected,
-          children: parseInline(choice.content, useDollar),
+          children: parseInline(choice.content, useDollar, defs),
         ),
       );
     } else {
-      children.addAll(parseInline(split.content, useDollar));
+      children.addAll(parseInline(split.content, useDollar, defs));
     }
     if (nested.isNotEmpty) {
-      children.addAll(parseBlocks(nested, useDollar, registry));
+      children.addAll(parseBlocks(nested, useDollar, registry, defs));
     }
     items.add(
       MdListItem(children: children, number: ordered ? split.number : null),
@@ -435,7 +555,13 @@ bool _markerMatches(String line, bool ordered) {
 /// Detect and parse a pipe table starting at [i] (header row + `:---:`
 /// separator + body rows). Returns the index after the table, or null if not
 /// a table.
-int? _tryTable(List<String> lines, int i, bool useDollar, List<MdNode> out) {
+int? _tryTable(
+  List<String> lines,
+  int i,
+  bool useDollar,
+  List<MdNode> out,
+  MarkdownDefinitions defs,
+) {
   final n = lines.length;
   final headerLine = lines[i].trim();
   if (!headerLine.contains('|') || i + 1 >= n) {
@@ -446,7 +572,7 @@ int? _tryTable(List<String> lines, int i, bool useDollar, List<MdNode> out) {
     return null;
   }
   final aligns = _parseAligns(sepLine);
-  final header = MdTableRow(cells: _splitTableRow(headerLine, useDollar));
+  final header = MdTableRow(cells: _splitTableRow(headerLine, useDollar, defs));
   final rows = <MdTableRow>[];
   var k = i + 2;
   while (k < n) {
@@ -454,7 +580,7 @@ int? _tryTable(List<String> lines, int i, bool useDollar, List<MdNode> out) {
     if (l.isEmpty || !l.contains('|')) {
       break;
     }
-    rows.add(MdTableRow(cells: _splitTableRow(l, useDollar)));
+    rows.add(MdTableRow(cells: _splitTableRow(l, useDollar, defs)));
     k += 1;
   }
   out.add(MdTable(aligns: aligns, header: header, rows: rows));
@@ -539,18 +665,21 @@ List<String> _splitPipesScanning(String t, bool useDollar) {
   final buf = StringBuffer();
   final n = t.length;
   var i = 0;
+  DollarMathCloser? dollars;
 
   while (i < n) {
     final c = t.codeUnitAt(i);
 
-    // `code span` — single tick, matching parseInline's indexOf('`').
+    // `code span` — a run of N backticks to the next run of exactly N, as
+    // parseInline matches it. An unclosed run is literal, all of it.
     if (c == backtick) {
-      final end = t.indexOf('`', i + 1);
-      if (end != -1) {
-        buf.write(t.substring(i, end + 1));
-        i = end + 1;
-        continue;
-      }
+      final span = codeSpanAt(t, i);
+      final end = span != null
+          ? span.close + span.run
+          : i + backtickRunAt(t, i);
+      buf.write(t.substring(i, end));
+      i = end;
+      continue;
     }
 
     if (c == backslash && i + 1 < n) {
@@ -581,9 +710,8 @@ List<String> _splitPipesScanning(String t, bool useDollar) {
         }
       }
       if (!matched) {
-        final end = t.indexOf(r'$', i + 1);
-        // parseInline requires non-blank content for a single-$ span.
-        if (end != -1 && t.substring(i + 1, end).trim().isNotEmpty) {
+        final end = (dollars ??= DollarMathCloser(t)).find(i);
+        if (end != -1) {
           buf.write(t.substring(i, end + 1));
           i = end + 1;
           matched = true;
@@ -609,9 +737,12 @@ List<String> _splitPipesScanning(String t, bool useDollar) {
   return cells;
 }
 
-List<MdTableCell> _splitTableRow(String line, bool useDollar) {
-  return _splitPipes(
-    line,
-    useDollar,
-  ).map((c) => MdTableCell(content: parseInline(c.trim(), useDollar))).toList();
+List<MdTableCell> _splitTableRow(
+  String line,
+  bool useDollar,
+  MarkdownDefinitions defs,
+) {
+  return _splitPipes(line, useDollar)
+      .map((c) => MdTableCell(content: parseInline(c.trim(), useDollar, defs)))
+      .toList();
 }

@@ -158,6 +158,9 @@ class _StreamingPageState extends State<StreamingPage> {
                     charactersPerSecond: _charactersPerSecond,
                     revealFadeSeconds: _fadeSeconds,
                     onLinkTap: (url, title) {},
+                    // `$$…$$` blocks in the reply. Single `$` stays off for a
+                    // reply that also writes `\(…\)`, so prices stay text.
+                    useDollarSignsForLatex: true,
                     // The longer derivations are wider than a chat column;
                     // they scroll sideways instead of running off the edge.
                     styleSheet: const GptMarkdownStyleSheet(

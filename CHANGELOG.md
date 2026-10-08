@@ -6,6 +6,56 @@
   [`material_ui`](https://pub.dev/packages/material_ui) (#152).
 * The minimum SDK is now Dart 3.12 and Flutter 3.44, which `material_ui`
   requires.
+## 1.3.4
+
+### Changed
+
+* With `useDollarSignsForLatex`, `$…$` is maths even in a reply that also
+  uses `\(…\)`. It used to be turned off for the whole reply. Prices still
+  stay text (`$5 and $10`).
+
+### Fixed
+
+* With the fade reveal, content below a list jumped up a few pixels as the
+  fade finished passing over the list — most visibly the next heading.
+* A code block (or second paragraph) inside a list item, after a blank
+  line, was rendered outside the list with the item's indent left in every
+  line.
+* While a code block inside a `>` quote was still streaming, `$` maths and
+  inline patterns could reach into it (`echo \(A/\)B`).
+* The streaming hold no longer briefly shows a lone `2` before `2. item`, an
+  empty `2.` item whose content is still arriving, or a `[1]` that becomes a
+  `[1]: url` definition.
+
+## 1.3.3
+
+### Added
+
+* CommonMark syntax: `_italic_` / `__bold__`, multi-backtick code spans,
+  `~~~` and longer fences, backslash escapes, entity references
+  (`&amp;`, `&#169;`), link titles and `<url>` destinations, reference
+  links, setext headings, closing `#`s, and hidden `<!-- comments -->`.
+* Footnotes: `text[^1]` with `[^1]: note`.
+* `[1]: url` gives a `[1]` citation chip a URL (`SourceTagBuildDetails.url`);
+  tapping it calls `onLinkTap` when no `onSourceTagTap` is set.
+* `MarkdownDefinitions` and `Plusparse.parse(definitions:)`, for parsing a
+  document in pieces.
+
+### Changed
+
+* `*` and `_` followed by a space no longer open emphasis (`2 * 3 * 4`).
+* Single `$` maths follows Pandoc's rule, so `$5 and $10` stays prose.
+* Text directly above `---` is now a heading.
+* `MdNode` has new subclasses: `MdFootnoteReference`, `MdFootnoteDefinitions`.
+
+### Fixed
+
+* Inline patterns no longer reach into code spans or maths (`` `:wave:` ``
+  showed a placeholder).
+* With `autolink: false`, patterns inside bold were not applied.
+* A URL right after `_` was not autolinked.
+* `$` maths was applied inside code.
+* `[text](url "title")` kept the title in the URL.
 
 ## 1.3.2
 

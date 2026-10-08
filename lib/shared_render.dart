@@ -473,13 +473,21 @@ class BlockWidgetSpan extends WidgetSpan {
 InlineSpan sourceTagSpan(
   BuildContext context,
   String id,
-  GptMarkdownConfig config,
-) {
+  GptMarkdownConfig config, {
+  String? url,
+}) {
   final tagStyle =
       (resolvedStyleSheet(context, config).sourceTag ?? const SourceTagStyle())
           .resolve(Theme.of(context).colorScheme);
   final onSourceTagTap = config.onSourceTagTap;
-  final onTap = onSourceTagTap == null ? null : () => onSourceTagTap(id);
+  final onLinkTap = config.onLinkTap;
+  // A tag the document gives a URL (`[1]: https://…`) opens it like a link
+  // when the host handles links but not tags.
+  final VoidCallback? onTap = onSourceTagTap != null
+      ? () => onSourceTagTap(id)
+      : url != null && onLinkTap != null
+      ? () => onLinkTap(url, id)
+      : null;
 
   final details = SourceTagBuildDetails(
     context: context,
@@ -488,6 +496,7 @@ InlineSpan sourceTagSpan(
     // documents itself as defaulting to the surrounding style; now it does.
     style: tagStyle.textStyle ?? config.style ?? const TextStyle(),
     id: id,
+    url: url,
     sourceTagStyle: tagStyle,
     onTap: onTap,
   );

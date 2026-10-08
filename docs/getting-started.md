@@ -4,7 +4,7 @@
 
 ```yaml
 dependencies:
-  gpt_markdown: ^1.3.2
+  gpt_markdown: ^1.3.4
 ```
 
 ```dart
@@ -54,22 +54,42 @@ ListView.builder(
 
 | | Syntax |
 |---|---|
-| Headings | `#` to `######` |
-| Emphasis | `**bold**`, `*italic*`, `~~strike~~`, `<u>underline</u>` |
-| Code | `` `inline` ``, language-tagged highlighted fences |
+| Headings | `#` to `######` (closing `#`s optional), and `Title` underlined with `===` or `---` |
+| Emphasis | `**bold**`, `*italic*`, `__bold__`, `_italic_`, `~~strike~~`, `<u>underline</u>` |
+| Code | `` `inline` ``, ``` `` with ` inside `` ```, highlighted ```` ``` ```` and `~~~` fences |
 | Lists | `-`, `1.`, nested |
 | Tasks | `- [x]`, `- [ ]` |
 | Options | `(x)`, `( )` |
 | Tables | with `:---:` alignment |
 | Quotes | `>` |
 | Rules | `---` |
-| Links | `[label](url)`, and bare URLs |
-| Images | `![alt](url)` |
-| Maths | `\( inline \)`, `\[ block \]` |
-| Citations | `[1]` |
+| Links | `[label](url "title")`, `[label](<url with spaces>)`, `[label][ref]` with `[ref]: url`, and bare URLs |
+| Images | `![alt](url)`, `![alt][ref]` |
+| Maths | `\( inline \)`, `\[ block \]`, and `$…$` / `$$…$$` with `useDollarSignsForLatex` |
+| Citations | `[1]` — with a `[1]: url` line, a tap opens the URL |
+| Footnotes | `text[^1]` with `[^1]: note` |
+| Escapes | `\*`, `\_`, `\#`, `\$`, … show the character itself |
+| Entities | `&amp;`, `&nbsp;`, `&#169;`, `&#x1F600;` |
+| Comments | `<!-- hidden -->` |
 
 Bare URLs, `www.` hosts and email addresses are linked automatically — see
 [inline syntax](inline-syntax.md).
+
+A few rules follow CommonMark and are worth knowing, because they decide
+what stays plain text:
+
+- An underscore inside a word is never emphasis: `snake_case_name` stays as
+  written. Outside a word it is, so an unquoted `__init__` renders as bold
+  `init` — put identifiers in backticks.
+- `*` or `_` followed by a space opens nothing, so `2 * 3 * 4` is arithmetic.
+- With `useDollarSignsForLatex`, a `$` needs a non-space after it to open
+  maths, and the closing `$` needs a non-space before it and no digit after
+  it (Pandoc's rule). `It costs $5 and $10` stays prose. Dollars inside code
+  are never maths.
+- `---` directly under a line of text makes that line a heading. Leave a
+  blank line before `---` for a horizontal rule.
+- Footnotes render where their definitions are written, numbered in the
+  order the definitions appear.
 
 Fenced code is highlighted automatically when it carries a language tag:
 

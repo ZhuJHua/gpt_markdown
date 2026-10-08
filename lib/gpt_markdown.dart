@@ -79,6 +79,18 @@ import 'custom_widgets/indent_widget.dart';
 import 'custom_widgets/link_button.dart';
 
 import 'plusparse/plusparse.dart';
+import 'plusparse/scanner.dart'
+    show
+        FenceOpen,
+        backtickRunAt,
+        DollarMathCloser,
+        codeSpanAt,
+        fenceOpen,
+        paragraphEnd,
+        isFenceClose,
+        openFenceAfter,
+        quoteDepth,
+        unquoted;
 
 export 'plusparse/plusparse.dart';
 
@@ -792,39 +804,141 @@ class GptMarkdown extends StatelessWidget {
   if (directives != null && directives.isNotEmpty) {
     tex = maskInlineDirectives(tex, directives, blockRegistry: blockRegistry);
   }
-  var dollarsAreMath = false;
+  // A reply may mix `\(…\)` and `$…$`. A single `$` used to stop being
+  // maths anywhere in a reply that also used `\(`, a guard from when a naive
+  // regex read every pair of prices as a formula. Pandoc's rule in
+  // [DollarMathCloser] keeps prices out of maths by itself, so the guard is
+  // gone and both forms render in one paragraph.
   if (useDollarSignsForLatex) {
-    String rewrite(String value) {
-      dollarsAreMath = false;
-      value = value.replaceAllMapped(
-        RegExp(r"(?<!\\)\$\$(.*?)(?<!\\)\$\$", dotAll: true),
-        (match) => "\\[${match[1] ?? ""}\\]",
-      );
-      if (!value.contains(r"\(")) {
-        // Same condition as the rewrite below: once a native `\(` appears,
-        // a single `$` can never become maths, so it must not be held either.
-        dollarsAreMath = true;
-        // Never `$$`: every closed `$$…$$` is already `\[…\]` by now, so a
-        // `$$` left over is a display formula still arriving. Read as an
-        // empty `$…$`, it became `\(\)` and left its body as prose.
-        value = value.replaceAllMapped(
-          RegExp(r"(?<![\\$])\$(?!\$)(.*?)(?<![\\$])\$(?!\$)"),
-          (match) => "\\(${match[1] ?? ""}\\)",
-        );
-        value = value.splitMapJoin(
-          RegExp(r"\[.*?\]|\(.*?\)"),
-          onNonMatch: (p0) {
-            return p0.replaceAll("\\\$", "\$");
-          },
-        );
-      }
-      return value;
-    }
-
     tex = blockRegistry == null
-        ? rewrite(tex)
-        : _outsideCustomBlocks(tex, blockRegistry, rewrite);
+        ? _rewriteDollarMath(tex)
+        : _outsideCustomBlocks(tex, blockRegistry, _rewriteDollarMath);
   }
   // tex = _removeExtraLinesInsideBlockLatex(tex);
-  return (text: tex, dollarsAreMath: dollarsAreMath);
+  return (text: tex, dollarsAreMath: useDollarSignsForLatex);
+}
+
+/// Whether [body] has a line that opens a code fence.
+bool _crossesFence(String body) {
+  if (!body.contains('\n')) {
+    return false;
+  }
+  for (final line in body.split('\n').skip(1)) {
+    if (fenceOpen(unquoted(line)) != null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// [source] with `$$…$$` rewritten to `\[…\]` and `$…$` to `\(…\)` —
+/// everywhere except code.
+///
+/// A scan rather than a regex, because a regex cannot see code: `echo $HOME
+/// $PATH` in a fence, or `` `$x` `` in a code span, is a shell variable, not
+/// maths. A single `$` follows Pandoc's rule ([DollarMathCloser]) and stays on
+/// its line, so `$5 and $10` is prose. Escaped dollars are left escaped; the
+/// parser turns `\$` into `$`.
+String _rewriteDollarMath(String source) {
+  if (!source.contains(r'$')) {
+    return source;
+  }
+  final out = StringBuffer();
+  final n = source.length;
+  final dollars = DollarMathCloser(source, sameLine: true);
+  var i = 0;
+  var lineStart = true;
+  var paragraphEndsAt = -1;
+  FenceOpen? fence;
+  var fenceDepth = 0;
+  while (i < n) {
+    if (lineStart) {
+      final lineEnd = source.indexOf('\n', i);
+      final end = lineEnd == -1 ? n : lineEnd;
+      final line = source.substring(i, end);
+      // Fences inside a block quote count too: `> ```bash` opens one, and it
+      // closes with its closing line or when the quote ends.
+      if (fence != null && quoteDepth(line) < fenceDepth) {
+        fence = null;
+      }
+      final open = fence;
+      final opens = open == null ? fenceOpen(unquoted(line)) : null;
+      if (open != null || opens != null) {
+        if (open != null && isFenceClose(unquoted(line), open)) {
+          fence = null;
+        } else if (opens != null) {
+          fence = opens;
+          fenceDepth = quoteDepth(line);
+        }
+        out.write(line);
+        if (lineEnd != -1) {
+          out.write('\n');
+        }
+        i = lineEnd == -1 ? n : lineEnd + 1;
+        continue;
+      }
+      lineStart = false;
+    }
+    final c = source.codeUnitAt(i);
+    if (c == 0x0A) {
+      out.writeCharCode(c);
+      i += 1;
+      lineStart = true;
+      continue;
+    }
+    if (c == 0x60 /* ` */ ) {
+      // Paired within the paragraph only: a stray backtick must not reach a
+      // backtick paragraphs later and hide all the maths in between.
+      if (i > paragraphEndsAt) {
+        paragraphEndsAt = paragraphEnd(source, i);
+      }
+      final span = codeSpanAt(source, i, end: paragraphEndsAt);
+      final end = span != null
+          ? span.close + span.run
+          : i + backtickRunAt(source, i);
+      out.write(source.substring(i, end));
+      i = end;
+      continue;
+    }
+    if (c == 0x5C /* \ */ && i + 1 < n) {
+      out.write(source.substring(i, i + 2));
+      lineStart = source.codeUnitAt(i + 1) == 0x0A;
+      i += 2;
+      continue;
+    }
+    if (c == 0x24 /* $ */ ) {
+      if (i + 1 < n && source.codeUnitAt(i + 1) == 0x24) {
+        var end = source.indexOf(r'$$', i + 2);
+        while (end > 0 && source.codeUnitAt(end - 1) == 0x5C) {
+          end = source.indexOf(r'$$', end + 1);
+        }
+        // A display formula does not run into a fence.
+        if (end != -1 && !_crossesFence(source.substring(i + 2, end))) {
+          out
+            ..write(r'\[')
+            ..write(source.substring(i + 2, end))
+            ..write(r'\]');
+          i = end + 2;
+          continue;
+        }
+        // A `$$` still arriving: never read as an empty `$…$`, which became
+        // `\(\)` and left the display formula's body as prose.
+        out.write(r'$$');
+        i += 2;
+        continue;
+      }
+      final end = dollars.find(i);
+      if (end != -1) {
+        out
+          ..write(r'\(')
+          ..write(source.substring(i + 1, end))
+          ..write(r'\)');
+        i = end + 1;
+        continue;
+      }
+    }
+    out.writeCharCode(c);
+    i += 1;
+  }
+  return out.toString();
 }

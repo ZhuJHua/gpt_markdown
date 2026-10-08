@@ -34,6 +34,10 @@ class _SliverGptMarkdownState extends State<SliverGptMarkdown> {
   String _source = '';
   List<String> _sources = const [];
 
+  /// Collected from the whole document: each segment renders in its own view,
+  /// and a reference in one must find a definition in another.
+  MarkdownDefinitions _definitions = MarkdownDefinitions.empty;
+
   @override
   void initState() {
     super.initState();
@@ -72,7 +76,36 @@ class _SliverGptMarkdownState extends State<SliverGptMarkdown> {
         blockRegistry: config.blockRegistry,
       );
     }
-    _sources = _segments.update(_source, blockRegistry: config.blockRegistry);
+    final definitions = MarkdownDefinitions.collect(
+      _source,
+      blockRegistry: config.blockRegistry,
+    );
+    // Kept by identity when unchanged, so no segment view re-prepares.
+    if (definitions != _definitions) {
+      _definitions = definitions;
+    }
+    // A segment that renders nothing — only reference definitions, or only an
+    // HTML comment — gets no row, so it adds no gap. Only a segment opening
+    // with `[` or `<!--` can be one, so only those are parsed to find out.
+    _sources = [
+      for (final segment in _segments.update(
+        _source,
+        blockRegistry: config.blockRegistry,
+      ))
+        if (!_rendersNothing(segment, config.blockRegistry)) segment,
+    ];
+  }
+
+  bool _rendersNothing(String segment, MarkdownBlockRegistry? registry) {
+    final start = segment.trimLeft();
+    if (!start.startsWith('[') && !start.startsWith('<!--')) {
+      return false;
+    }
+    return Plusparse.parse(
+      segment,
+      blockRegistry: registry,
+      definitions: _definitions,
+    ).children.isEmpty;
   }
 
   @override
@@ -89,7 +122,11 @@ class _SliverGptMarkdownState extends State<SliverGptMarkdown> {
         delegate: SliverChildBuilderDelegate(
           (context, index) => Padding(
             padding: EdgeInsets.only(top: index == 0 ? 0 : gap),
-            child: _IncrementalMdView(text: _sources[index], config: config),
+            child: _IncrementalMdView(
+              text: _sources[index],
+              config: config,
+              definitions: _definitions,
+            ),
           ),
           childCount: _sources.length,
         ),

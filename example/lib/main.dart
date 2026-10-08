@@ -30,25 +30,119 @@ class App extends StatelessWidget {
   }
 }
 
-/// Sample content demonstrating the key features of gpt_markdown.
+/// Sample content showing every syntax gpt_markdown renders.
+///
+/// Rendered with the `$…$ math` switch on, which is the default here so the
+/// dollar examples work.
 const _markdown = r'''
 # GPT Markdown
 
-**Bold**, *italic*, ~~strikethrough~~, `inline code`, and <u>underline</u>.
+Every syntax the renderer understands, one section each. Edit anything on
+the left and watch it render.
 
----
+## Headings
 
-## LaTeX Math
+# Heading 1
+## Heading 2
+### Heading 3
+#### Heading 4
+##### Heading 5
+###### Heading 6
 
-Inline: \( E = mc^2 \) and the quadratic formula \( x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a} \)
+### Closing hashes are optional ###
 
-Block:
+Setext heading 1
+================
+
+Setext heading 2
+----------------
+
+## Emphasis
+
+**Bold**, *italic*, ***bold italic***, ~~strikethrough~~ and <u>underline</u>.
+
+__Bold__, _italic_ and ___bold italic___ with underscores.
+
+Mixed: **bold with _italic_ inside** and *italic with **bold** inside*.
+
+An underscore inside a word is never emphasis: snake_case_name, MAX_VALUE.
+
+A star with a space after it is arithmetic: 2 * 3 * 4 = 24.
+
+## Inline code
+
+Single backticks: `flutter pub add gpt_markdown`.
+
+Double backticks hold a backtick: `` Use `code` here ``.
+
+Markup is not parsed in code: `**not bold** _not italic_ &amp;`.
+
+## Escapes and entities
+
+Backslash escapes show the character: \*not italic\*, \_not italic\_,
+\# not a heading, \`not code\`, price \$5.
+
+Entities decode: &amp; &lt;tag&gt; &copy; &reg; &trade; &mdash; &hellip;
+&rarr; &le; &ne; &infin; &alpha;&beta;&gamma; &#169; &#x1F680;
+
+Line one ends with a backslash\
+so this is a new line. Line three ends with two spaces  
+and so does this break.
+
+<!-- This comment is hidden. Open the editor to see it. -->
+
+## Links
+
+Inline [link](https://gptmarkdown.com), with a
+[title](https://gptmarkdown.com "gpt_markdown home"), and to a
+[path with spaces](<docs/getting started.md>).
+
+Reference links: [full form][home], [collapsed][], and [shortcut].
+
+Autolinks: https://pub.dev/packages/gpt_markdown, www.flutter.dev,
+<https://dart.dev>, and hello@example.com.
+
+[home]: https://gptmarkdown.com "gpt_markdown"
+[collapsed]: https://pub.dev
+[shortcut]: https://github.com/useval/gpt_markdown
+
+## Images
+
+![120x](https://raw.githubusercontent.com/useval/gpt_markdown/main/screenshots/math.png)
+
+## Citations and footnotes
+
+Large language models cite sources [1] [2], and the chip opens the
+URL defined below it.
+
+Footnotes add notes at the end[^note], numbered in order[^2].
+
+[1]: https://en.wikipedia.org/wiki/Large_language_model
+[2]: https://en.wikipedia.org/wiki/Markdown
+
+[^note]: A footnote can hold **Markdown** and [links](https://commonmark.org).
+[^2]: The second footnote.
+
+## LaTeX math
+
+Inline with \( E = mc^2 \) and \( x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a} \).
+
+Block with brackets:
 
 \[
 \int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
 \]
 
-## Code Block
+Block with dollars:
+
+$$
+\sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}
+$$
+
+Inline with dollars too: $a^2 + b^2 = c^2$, in the same reply as the
+`\( \)` formulas above. Prices stay prose: it costs $5 and $10.
+
+## Code blocks
 
 ```dart
 GptMarkdown(
@@ -56,36 +150,68 @@ GptMarkdown(
 )
 ```
 
-## Table
+~~~python
+for epoch in range(100):
+    theta -= alpha * compute_gradient(X, y, theta)
+~~~
 
-| Feature         | Supported |
-|:----------------|:---------:|
-| Markdown        | ✅        |
-| LaTeX math      | ✅        |
-| Code blocks     | ✅        |
-| Tables          | ✅        |
-| RTL support     | ✅        |
-| Custom builders | ✅        |
-| WASM            | ✅        |
-
-### Pipes inside cells
-
-A `|` inside math or a code span belongs to the cell, not to the table.
-
-| Complex Number | Real Part (\(a\)) | Modulus (\(|z|\)) | Code     |
-|----------------|--------------------|--------------------|----------|
-| \(3 + 4i\)     | 3                  | 5                  | `a|b`    |
-| \(1 - 2i\)     | 1                  | \(\sqrt{5}\)       | x \| y   |
+````markdown
+A longer fence can show a fence:
+```bash
+echo $HOME
+```
+````
 
 ## Lists
 
-1. Install: `flutter pub add gpt_markdown`
-2. Import: `package:gpt_markdown/gpt_markdown.dart`
-3. Use: `GptMarkdown(yourText)`
+- Bullet with `-`
+* Bullet with `*`
++ Bullet with `+`
+  - Nested bullet
+    - Deeper bullet
 
-- [x] Render Markdown
-- [x] Render LaTeX math
-- [ ] Ship your AI app
+1. First
+2. Second
+   1. Nested ordered
+   2. Items
+
+A list can start at any number:
+
+5. Starts at five
+6. And keeps counting
+
+Or use parenthesis markers:
+
+1) First
+2) Second
+
+- [x] Task done
+- [ ] Task to do
+
+(x) Selected option
+( ) Other option
+
+- Block maths in a list: \[ a^2 + b^2 = c^2 \]
+
+## Tables
+
+| Left | Center | Right |
+|:-----|:------:|------:|
+| a    | b      | c     |
+| **bold** | `code` | \( x^2 \) |
+
+A `|` inside maths or code belongs to the cell:
+
+| Complex Number | Modulus (\(|z|\)) | Code   |
+|----------------|--------------------|--------|
+| \(3 + 4i\)     | 5                  | `a|b`  |
+| \(1 - 2i\)     | \(\sqrt{5}\)       | x \| y |
+
+## Quotes
+
+> A block quote.
+>
+> > A nested quote.
 
 ## Alerts
 
@@ -104,19 +230,13 @@ A `|` inside math or a code span belongs to the cell, not to the table.
 > [!CAUTION]
 > Negative potential consequences of an action.
 
-## AI Output (Markdown + LaTeX + Code mixed)
+## Horizontal rules
 
-The **gradient descent** update rule is:
+---
 
-\[ \theta := \theta - \alpha \nabla J(\theta) \]
+***
 
-where \( \alpha \) is the learning rate.
-
-```python
-for epoch in range(100):
-    grad = compute_gradient(X, y, theta)
-    theta -= alpha * grad
-```
+___
 
 > Visit [gptmarkdown.com](https://gptmarkdown.com) for the interactive playground.
 ''';
@@ -140,8 +260,9 @@ class _ExamplePageState extends State<ExamplePage> {
   /// with the legacy regex pipeline. Defaults to plusparse.
   bool _incremental = true;
 
-  /// Lets `$…$` open math, so `$|z|$` can be tried alongside `\(|z|\)`.
-  bool _useDollar = false;
+  /// Lets `$…$` and `$$…$$` open maths. On by default so the sample's dollar
+  /// examples render.
+  bool _useDollar = true;
 
   TextDirection _textDirection = TextDirection.ltr;
 

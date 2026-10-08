@@ -1,6 +1,8 @@
 /// Finding a safe place to cut streaming Markdown in two.
 library;
 
+import '../plusparse/scanner.dart';
+
 /// The offset of the last blank line that is safe to split at, or 0 when the
 /// whole document has to stay together.
 ///
@@ -19,11 +21,32 @@ library;
 /// blank line, because the next token may still extend it — a list gaining
 /// another item, a paragraph another sentence.
 int settledSplitOffset(String source) {
-  var inFence = false;
+  FenceOpen? fence;
   var inLatex = false;
+  var inComment = false;
 
   // Offsets of blank lines outside fences and block maths.
   final candidates = <int>[];
+
+  // The lines since the last candidate, for [continuesAfterBlank].
+  final block = <String>[];
+
+  /// The first non-blank line after offset [from], or null.
+  String? nextContentLine(int from) {
+    var start = from;
+    while (start < source.length) {
+      var end = source.indexOf('\n', start);
+      if (end == -1) {
+        end = source.length;
+      }
+      final candidate = source.substring(start, end);
+      if (candidate.trim().isNotEmpty) {
+        return candidate;
+      }
+      start = end + 1;
+    }
+    return null;
+  }
 
   var lineStart = 0;
   var index = 0;
@@ -37,19 +60,36 @@ int settledSplitOffset(String source) {
     final line = source.substring(lineStart, index);
     final trimmed = line.trimLeft();
 
-    if (inFence) {
-      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
-        inFence = false;
+    final open = fence;
+    if (open != null) {
+      if (isFenceClose(line, open)) {
+        fence = null;
       }
     } else if (inLatex) {
       if (trimmed.contains(r'\]')) {
         inLatex = false;
       }
-    } else if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
-      inFence = true;
+    } else if (inComment) {
+      if (trimmed.contains('-->')) {
+        inComment = false;
+      }
+    } else if (fenceOpen(trimmed) != null) {
+      fence = fenceOpen(trimmed);
     } else if (trimmed.startsWith(r'\[') && !trimmed.contains(r'\]')) {
       inLatex = true;
+    } else if (startsHtmlComment(trimmed) &&
+        !trimmed.substring(4).contains('-->')) {
+      inComment = true;
     } else if (!atEnd && trimmed.isEmpty && lineStart > 0) {
+      // A blank line inside a list item — before the item's second paragraph
+      // or its code block — is not a block boundary.
+      final next = nextContentLine(index + 1);
+      if (next != null && continuesAfterBlank(block, next)) {
+        block.add(line);
+        index++;
+        lineStart = index;
+        continue;
+      }
       // The split goes after the blank line, so the tail starts on real
       // content rather than with leading whitespace.
       //
@@ -60,6 +100,10 @@ int settledSplitOffset(String source) {
       // runs one construct too far ahead and then jumps *backwards* as soon
       // as the next character arrives — content settles, then unsettles.
       candidates.add(index + 1);
+      block.clear();
+    }
+    if (trimmed.isNotEmpty) {
+      block.add(line);
     }
 
     if (atEnd) {

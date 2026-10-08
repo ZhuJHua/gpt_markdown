@@ -239,10 +239,14 @@ class MdInlineLatex extends MdNode {
 }
 
 class MdLink extends MdNode {
-  const MdLink({required this.children, required this.url});
+  const MdLink({required this.children, required this.url, this.title});
 
   final List<MdNode> children;
   final String url;
+
+  /// The optional title of `[text](url "title")`, or of the reference
+  /// definition a `[text][label]` link resolved to.
+  final String? title;
 }
 
 class MdImage extends MdNode {
@@ -251,10 +255,14 @@ class MdImage extends MdNode {
     required this.alt,
     this.width,
     this.height,
+    this.title,
   });
 
   final String url;
   final String alt;
+
+  /// The optional title of `![alt](url "title")`.
+  final String? title;
 
   /// Width parsed from an alt of the form `WxH` (e.g. `![100x200](url)`).
   final double? width;
@@ -263,9 +271,49 @@ class MdImage extends MdNode {
 
 /// A citation marker such as `[1]`.
 class MdSourceTag extends MdNode {
-  const MdSourceTag({required this.id});
+  const MdSourceTag({required this.id, this.url});
 
   final String id;
+
+  /// The URL of a `[1]: https://…` reference definition for this tag, when
+  /// the document has one. The tag still renders as a citation chip.
+  final String? url;
+}
+
+/// A footnote reference such as `[^1]` or `[^note]`, resolved against the
+/// document's footnote definitions. An unresolved `[^x]` stays text.
+class MdFootnoteReference extends MdNode {
+  const MdFootnoteReference({required this.label, required this.number});
+
+  /// The label as written, without `^`.
+  final String label;
+
+  /// What the reference displays: the position of its definition among the
+  /// document's footnote definitions, from 1.
+  final int number;
+}
+
+/// One footnote definition, `[^label]: text`.
+class MdFootnote {
+  const MdFootnote({
+    required this.label,
+    required this.number,
+    required this.children,
+  });
+
+  final String label;
+  final int number;
+
+  /// The footnote's body, parsed as blocks.
+  final List<MdNode> children;
+}
+
+/// A run of consecutive footnote definitions, rendered where they were
+/// written — in a model's reply, that is the end.
+class MdFootnoteDefinitions extends MdNode {
+  const MdFootnoteDefinitions({required this.footnotes});
+
+  final List<MdFootnote> footnotes;
 }
 
 class MdLineBreak extends MdNode {

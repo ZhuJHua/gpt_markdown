@@ -375,16 +375,18 @@ class _AutolinkScan {
   static bool _isSchemeChar(int c) =>
       _isAlnum(c) || c == _plus || c == _dot || c == _hyphen;
 
-  /// `[\w@.+/-]`, the lookbehind that keeps a link from starting mid-word,
-  /// mid-path or mid-address.
+  /// `[A-Za-z0-9@.+/-]`, the lookbehind that keeps a link from starting
+  /// mid-word, mid-path or mid-address.
   ///
   /// Only `@` and `/` are ever decisive: every other character here is also a
   /// run character, so a position preceded by one is inside a run the scan
-  /// already skipped whole. Spelling the class out anyway is what keeps it
+  /// already skipped. Spelling the class out anyway is what keeps it
   /// checkable against the pattern.
+  ///
+  /// Not `_`, which is a run character but not a boundary: GFM lets an
+  /// autolink follow `_`. That is why [_bareRunEnd] stops after one.
   static bool _isBoundaryChar(int c) =>
       _isAlnum(c) ||
-      c == _underscore ||
       c == _at ||
       c == _dot ||
       c == _plus ||
@@ -479,9 +481,16 @@ class _AutolinkScan {
 
   /// The end of the `[A-Za-z0-9._+-]` run starting at [from], which is where
   /// the next position the lookbehind could accept begins.
+  ///
+  /// The skip ends just after an `_`, the one run character that is not a
+  /// boundary: the position after it can still start a link
+  /// (`foo_https://x.dev`).
   static int _bareRunEnd(String text, int from, int n) {
     var p = from;
     while (p < n && _isBareStartChar(text.codeUnitAt(p))) {
+      if (text.codeUnitAt(p) == _underscore) {
+        return p + 1;
+      }
       p++;
     }
     // Always makes progress: the caller only reaches this with a run

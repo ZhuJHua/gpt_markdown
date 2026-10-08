@@ -28,6 +28,7 @@ so the awkward cases come out right:
 | `www.example.com` | `http://www.example.com` |
 | `ada@example.com` | `mailto:ada@example.com` |
 | `**https://x.com**` | bold link, `**` never reaches the href |
+| `_https://x.com` | `https://x.com` — GFM allows a link after `_`, as after `*`, `~`, `(` |
 | `` `https://x.com` `` | nothing — it stays code |
 
 `<https://x.com>`, `<mailto:a@b.com>` and `<a@b.com>` follow CommonMark §6.5.
@@ -108,26 +109,18 @@ GptMarkdown(
 
 Patterns are matched **ahead of** the built-in components, so a pattern beats
 the default reading of the same text — a pattern whose regex covers `**GH-1**`,
-asterisks and all, renders your chip rather than bold. Fenced code, registered
-custom blocks and multi-line block maths are deliberate exceptions: their
-content is not Markdown, and a pattern reaching inside would rewrite source the
-author asked to see verbatim. Block maths is protected only while its closing
-`\]` sits on a later line than the opening `\[`. Inside a one-line `\[ … \]` a
-pattern still matches, and since the match is lifted out before parsing, the
-maths renderer is handed the placeholder — the equation and the chip are both
-lost.
+asterisks and all, renders your chip rather than bold. Code and maths are
+deliberate exceptions — fenced code (```` ``` ```` or `~~~`), code spans of any
+backtick length, `\( … \)` and `\[ … \]` maths (and `$…$` with
+`useDollarSignsForLatex`), and registered custom blocks. Their content is not
+prose, and a pattern reaching inside would rewrite source the author asked to
+see verbatim: `` `:wave:` `` stays the code `:wave:`. A code span pairs only
+within its paragraph, and an escaped `` \` `` opens none, exactly as the parser
+reads them.
 
 On the deprecated legacy pipeline precedence is leftmost-match instead — a
 built-in whose match starts at an earlier offset swallows the text, and the
 pattern wins only when both start at the same offset.
-
-> [!WARNING]
-> A single-backtick code span is **not** one of those protected regions. On the
-> default pipeline the match is lifted out of the source before the parser sees
-> the backticks, so with a `GH-\d+` pattern `` `GH-123` `` renders neither the
-> chip nor the literal text — the code chip shows the internal placeholder. The
-> legacy pipeline gets this case right, because the code span starts first and
-> claims the whole thing.
 
 ### Prefixed tokens
 

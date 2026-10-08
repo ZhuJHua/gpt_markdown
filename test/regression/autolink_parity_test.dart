@@ -130,6 +130,13 @@ String _show(String input) =>
 
 /// Every input both paths are run over.
 final List<String> _corpus = [
+  // ── after `_`, which GFM allows before an autolink ──
+  '_https://x.dev',
+  'foo_https://x.dev/a_b',
+  'a_www.example.com',
+  'x__https://x.dev',
+  'snake_case_name and user_name@example.com',
+  '_a@b.com',
   // ── the six alternatives of AutolinkMd._pattern, one at a time ──
   // 1. <scheme:...>
   '<https://example.com>',

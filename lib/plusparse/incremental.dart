@@ -65,6 +65,7 @@ class _IncrementalMdView extends StatefulWidget {
     this.blockAnimationDuration = const Duration(milliseconds: 200),
     this.blockAnimationCurve = Curves.easeOut,
     this.holdMathDollars = false,
+    this.definitions,
   });
 
   final String text;
@@ -92,6 +93,11 @@ class _IncrementalMdView extends StatefulWidget {
   /// `$` instead of showing it as prose it will not stay.
   final bool holdMathDollars;
 
+  /// The link and footnote definitions of the document [text] belongs to,
+  /// when [text] is only part of it — [SliverGptMarkdown] renders one view
+  /// per segment. Null collects them from [text].
+  final MarkdownDefinitions? definitions;
+
   @override
   State<_IncrementalMdView> createState() => _IncrementalMdViewState();
 }
@@ -107,6 +113,13 @@ class _IncrementalMdViewState extends State<_IncrementalMdView>
   /// to avoid.
   final Map<(int, String), List<InlineSpan>> _spans = {};
   final Map<String, MdDocument> _documents = {};
+
+  /// The definitions every segment was parsed against, and, per segment
+  /// source, the labels its parse looked up. A changed definition re-parses
+  /// only the segments that asked for it — while a reference definition
+  /// streams in, its URL changes on every token.
+  MarkdownDefinitions _definitions = MarkdownDefinitions.empty;
+  final Map<String, Set<String>> _lookups = {};
   final Map<(int, String), int> _characterCounts = {};
   List<String> _segments = const [];
   List<List<InlineSpan>> _rendered = const [];
@@ -214,6 +227,7 @@ class _IncrementalMdViewState extends State<_IncrementalMdView>
       _noteArrival();
     }
     if (widget.text != oldWidget.text ||
+        widget.definitions != oldWidget.definitions ||
         widget.isStreaming != oldWidget.isStreaming ||
         widget.revealing != oldWidget.revealing ||
         widget.holdMathDollars != oldWidget.holdMathDollars) {
@@ -227,6 +241,7 @@ class _IncrementalMdViewState extends State<_IncrementalMdView>
       widget.config.blockComponents,
     )) {
       _documents.clear();
+      _lookups.clear();
     }
     if (!oldWidget.config.isSame(widget.config)) {
       _dropCaches();
@@ -410,6 +425,7 @@ class _IncrementalMdViewState extends State<_IncrementalMdView>
       _documents[segment] ??= Plusparse.parse(
         segment,
         blockRegistry: widget.config.blockRegistry,
+        definitions: _definitions.recording(_lookups[segment] = <String>{}),
       ),
       _renderConfig,
     );
@@ -493,9 +509,14 @@ class _IncrementalMdViewState extends State<_IncrementalMdView>
       // A separator: the "\n" or "\n\n" the renderer puts between blocks.
       // It carries no content, so dropping it loses nothing — the column
       // stacks what it separated.
+      //
+      // Recognised by what it holds, not by its shape. While the reveal is
+      // fading it in, the same "\n" arrives rebuilt as a span with children.
+      // Testing for a childless span rejected it, so a list the fade was still
+      // passing over fell back to one paragraph of placeholders — a few pixels
+      // taller — and everything below jumped up when the fade moved on.
       if (span is TextSpan &&
-          span.children == null &&
-          (span.text ?? '').trim().isEmpty) {
+          span.toPlainText(includeSemanticsLabels: false).trim().isEmpty) {
         continue;
       }
       return null;
@@ -669,6 +690,30 @@ class _IncrementalMdViewState extends State<_IncrementalMdView>
     return withTail(last.substring(0, safe));
   }
 
+  /// Adopts [definitions], dropping every cached parse and render that looked
+  /// up a label whose definition changed.
+  void _updateDefinitions(MarkdownDefinitions definitions) {
+    if (definitions == _definitions) {
+      return;
+    }
+    final changed = definitions.changedKeys(_definitions);
+    _definitions = definitions;
+    final stale = <String>{
+      for (final entry in _lookups.entries)
+        if (entry.value.any(changed.contains)) entry.key,
+    };
+    if (stale.isEmpty) {
+      return;
+    }
+    _documents.removeWhere((key, _) => stale.contains(key));
+    _lookups.removeWhere((key, _) => stale.contains(key));
+    bool hit((int, String) key) => stale.contains(key.$2);
+    _spans.removeWhere((key, _) => hit(key));
+    _characterCounts.removeWhere((key, _) => hit(key));
+    _settled.removeWhere((key, _) => hit(key));
+    _plainText.removeWhere((key, _) => hit(key));
+  }
+
   /// Arms the quiet-stream release, once per stretch of unchanged text.
   void _armHoldRelease() {
     _holdRelease ??= Timer(const Duration(milliseconds: 1500), () {
@@ -683,30 +728,33 @@ class _IncrementalMdViewState extends State<_IncrementalMdView>
 
   /// Whether [segment] contains a fence that has not closed yet.
   ///
-  /// The same naive toggle [splitStreamSegments] uses, so the two always
-  /// agree about what is inside a fence.
-  static bool _hasOpenFence(String segment) {
-    var open = false;
-    for (final line in segment.split('\n')) {
-      if (line.trimLeft().startsWith('```')) {
-        open = !open;
-      }
-    }
-    return open;
-  }
+  /// The same fence rules [splitStreamSegments] and the parser use, so they
+  /// all agree about what is inside a fence.
+  static bool _hasOpenFence(String segment) =>
+      openFenceAfter(segment.split('\n')) != null;
 
   /// Offset just past the last line that closes a fence in [segment], or 0.
   static int _afterLastFence(String segment) {
-    var open = false;
+    FenceOpen? open;
+    var depth = 0;
     var after = 0;
     var offset = 0;
     for (final line in segment.split('\n')) {
       final lineEnd = offset + line.length;
-      if (line.trimLeft().startsWith('```')) {
-        open = !open;
-        if (!open) {
+      final current = open;
+      final lineDepth = quoteDepth(line);
+      if (current != null && lineDepth >= depth) {
+        if (isFenceClose(unquoted(line), current)) {
+          open = null;
           after = lineEnd < segment.length ? lineEnd + 1 : segment.length;
         }
+      } else {
+        // A quoted fence also closes when its quote ends.
+        if (current != null) {
+          after = offset;
+        }
+        open = fenceOpen(unquoted(line));
+        depth = lineDepth;
       }
       offset = lineEnd + 1;
     }
@@ -766,8 +814,16 @@ class _IncrementalMdViewState extends State<_IncrementalMdView>
             ),
           )
         : <String>[source];
+    _updateDefinitions(
+      widget.definitions ??
+          MarkdownDefinitions.collect(
+            source,
+            blockRegistry: widget.config.blockRegistry,
+          ),
+    );
     final live = _segments.toSet();
     _documents.removeWhere((key, _) => !live.contains(key));
+    _lookups.removeWhere((key, _) => !live.contains(key));
     bool removed((int, String) key) =>
         key.$1 >= _segments.length || _segments[key.$1] != key.$2;
     _spans.removeWhere((key, _) => removed(key));
@@ -857,6 +913,13 @@ class _IncrementalMdViewState extends State<_IncrementalMdView>
     final children = <Widget>[];
     final count = _visibleCount(revealed);
     for (var i = 0; i < count; i++) {
+      // A segment that renders nothing — only reference definitions, or only
+      // an HTML comment — takes no row. As an empty row it still received a
+      // gap on each side, and a reply ending in a block of definitions showed
+      // a large blank band where they were.
+      if (_rendered[i].isEmpty) {
+        continue;
+      }
       children.add(
         revealing
             ? ValueListenableBuilder<int>(

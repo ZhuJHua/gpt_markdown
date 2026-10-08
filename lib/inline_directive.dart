@@ -246,7 +246,28 @@ String maskInlinePatterns(
   final opaque = [
     ..._opaqueRegions(source),
     if (blockRegistry != null) ..._customBlockRegions(source, blockRegistry),
-  ];
+  ]..sort((a, b) => a.$1.compareTo(b.$1));
+  // Regions may nest (a code span inside a custom block); the running
+  // maximum of their ends is what a binary search over starts can rely on.
+  final reach = <int>[];
+  for (final region in opaque) {
+    reach.add(reach.isEmpty || region.$2 > reach.last ? region.$2 : reach.last);
+  }
+  bool overlapsOpaque(int start, int end) {
+    // The last region starting before `end`; any overlap reaches past `start`.
+    var low = 0;
+    var high = opaque.length;
+    while (low < high) {
+      final mid = (low + high) >> 1;
+      if (opaque[mid].$1 < end) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low > 0 && reach[low - 1] > start;
+  }
+
   final hits = <({int start, int end, int pattern, String text})>[];
   for (var index = 0; index < patterns.length; index++) {
     for (final match in patterns[index].pattern.allMatches(source)) {
@@ -254,7 +275,7 @@ String maskInlinePatterns(
       if (text == null || text.isEmpty) {
         continue;
       }
-      if (opaque.any((r) => match.start < r.$2 && match.end > r.$1)) {
+      if (overlapsOpaque(match.start, match.end)) {
         continue;
       }
       hits.add((
@@ -293,34 +314,112 @@ String maskInlinePatterns(
 }
 
 /// Byte ranges of [source] a pattern must not reach into.
+///
+/// Fenced code and block maths, found with the parser's own fence rules — a
+/// ```` ```` ```` fence holding a ```` ``` ```` fence is one region, and a
+/// `~~~` fence closes only on tildes. Then, in the text between them, every
+/// code span and every inline formula. A code span is code the reader asked
+/// to see verbatim exactly as a fence is: masking a `:wave:` inside
+/// `` `:wave:` `` showed the reader the placeholder's raw payload, because
+/// code is never expanded back.
 List<(int, int)> _opaqueRegions(String source) {
-  final regions = <(int, int)>[];
+  final blocks = <(int, int)>[];
   var offset = 0;
+  FenceOpen? fence;
   int? fenceStart;
   int? mathStart;
+  var fenceDepth = 0;
   for (final line in source.split('\n')) {
     final trimmed = line.trimLeft();
-    if (fenceStart != null) {
-      if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
-        regions.add((fenceStart, offset + line.length));
-        fenceStart = null;
+    final open = fence;
+    // A fence inside a block quote closes with its closing line, or when the
+    // quote ends.
+    if (open != null && quoteDepth(line) < fenceDepth) {
+      blocks.add((fenceStart!, offset > 0 ? offset - 1 : 0));
+      fence = null;
+    }
+    final current = fence;
+    if (current != null) {
+      if (isFenceClose(unquoted(line), current)) {
+        blocks.add((fenceStart!, offset + line.length));
+        fence = null;
       }
     } else if (mathStart != null) {
       if (trimmed.contains(r'\]')) {
-        regions.add((mathStart, offset + line.length));
+        blocks.add((mathStart, offset + line.length));
         mathStart = null;
       }
-    } else if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+    } else if ((fence = fenceOpen(unquoted(line))) != null) {
       fenceStart = offset;
+      fenceDepth = quoteDepth(line);
     } else if (trimmed.startsWith(r'\[') && !trimmed.contains(r'\]')) {
       mathStart = offset;
     }
     offset += line.length + 1;
   }
   // An unterminated region runs to the end.
-  final open = fenceStart ?? mathStart;
-  if (open != null) {
-    regions.add((open, source.length));
+  final unclosed = fence != null ? fenceStart : mathStart;
+  if (unclosed != null) {
+    blocks.add((unclosed, source.length));
+  }
+  return [...blocks, ..._inlineOpaqueRegions(source, blocks)];
+}
+
+/// Code spans and `\(…\)` / `\[…\]` formulas in [source] outside [blocks],
+/// matched as the inline parser matches them: a run of N backticks closes at
+/// the next run of exactly N in the same paragraph, an escaped backtick opens
+/// nothing, and a formula runs to its closing delimiter.
+List<(int, int)> _inlineOpaqueRegions(String source, List<(int, int)> blocks) {
+  if (!source.contains('`') && !source.contains(r'\')) {
+    return const [];
+  }
+  final regions = <(int, int)>[];
+  final n = source.length;
+  var paragraphEndsAt = -1;
+  var i = 0;
+  // [blocks] come in source order, so one cursor walks them alongside `i`.
+  var b = 0;
+  while (i < n) {
+    while (b < blocks.length && blocks[b].$2 <= i) {
+      b += 1;
+    }
+    if (b < blocks.length && i >= blocks[b].$1) {
+      // Skip a block region whole.
+      i = blocks[b].$2;
+      continue;
+    }
+    // The next block bounds a span's search.
+    final nextBlock = b < blocks.length ? blocks[b].$1 : n;
+    final c = source.codeUnitAt(i);
+    if (c == 0x5C /* \ */ && i + 1 < n) {
+      final next = source.codeUnitAt(i + 1);
+      if (next == 0x28 /* ( */ || next == 0x5B /* [ */ ) {
+        final end = source.indexOf(next == 0x28 ? r'\)' : r'\]', i + 2);
+        if (end != -1 && end < nextBlock) {
+          regions.add((i, end + 2));
+          i = end + 2;
+          continue;
+        }
+      }
+      // Any other escape is one unit: `\`` is a literal backtick.
+      i += 2;
+      continue;
+    }
+    if (c == 0x60 /* ` */ ) {
+      if (i > paragraphEndsAt) {
+        paragraphEndsAt = paragraphEnd(source, i);
+      }
+      final limit = paragraphEndsAt < nextBlock ? paragraphEndsAt : nextBlock;
+      final span = codeSpanAt(source, i, end: limit);
+      if (span != null) {
+        regions.add((i, span.close + span.run));
+        i = span.close + span.run;
+      } else {
+        i += backtickRunAt(source, i);
+      }
+      continue;
+    }
+    i += 1;
   }
   return regions;
 }
