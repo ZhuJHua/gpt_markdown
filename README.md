@@ -25,16 +25,10 @@
   <a href="https://pub.dev/packages/gpt_markdown">📦 pub.dev</a>
 </p>
 
-<br>
-
 <p align="center">
   <a href="https://x.com/use_val">
-    <img src="https://img.shields.io/badge/Follow%20the%20stream-%40use__val-F47C3C?style=for-the-badge&logo=x&logoColor=white&labelColor=000000" alt="Follow the stream: @use_val on X">
+    <img src="https://img.shields.io/badge/Follow%20Val%20on%20X-%40use__val-F47C3C?logo=x&logoColor=white&labelColor=000000" alt="Follow Val on X: @use_val">
   </a>
-</p>
-
-<p align="center">
-  <sub>Releases, demos and what we're building next, as it happens.</sub>
 </p>
 
 ---
