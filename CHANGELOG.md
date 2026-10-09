@@ -6,6 +6,7 @@
   [`material_ui`](https://pub.dev/packages/material_ui) (#152).
 * The minimum SDK is now Dart 3.12 and Flutter 3.44, which `material_ui`
   requires.
+
 ## 1.3.4
 
 ### Changed
